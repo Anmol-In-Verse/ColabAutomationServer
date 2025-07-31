@@ -53,13 +53,13 @@ def extract_public_url(driver, timeout=600):
 
     raise TimeoutError("❌ Public URL not found in output after timeout.")
 
-
+from urllib.parse import urlparse
 
 def start_colab_session():
     threading.Thread(target=heartbeat, daemon=True).start()
 
     options = Options()
-    options.headless = False
+    options.headless = True
 
     driver = webdriver.Firefox(options=options)
     driver.get("https://colab.research.google.com/")
@@ -69,8 +69,26 @@ def start_colab_session():
     load_cookies(driver, "cookies.json")
     driver.refresh()
     wait_with_log(10, "🔄 Refreshing after cookies load")
+    
+    
 
+
+    parsed_url = urlparse(driver.current_url)
+    print(parsed_url)
+    print(driver.current_url)
+    
     driver.get("https://colab.research.google.com/drive/1SYoYLAALYgvNVwPRAYxsJBKK_6aTHjNc")
+    # 🕵️ Monitor URL for sign-in redirect (max 30s)
+    for i in range(30):
+        current_url = driver.current_url
+        parsed_url = urlparse(current_url)
+        if "accounts.google.com" in parsed_url.netloc and "/signin/" in parsed_url.path:
+            logging.error("❌ Detected redirect to login page. Session cookies are invalid.")
+            logging.info(f"🔗 Redirected URL: {current_url}")
+            driver.quit()
+            raise RuntimeError("💥 Terminating session: cookie expired.")
+        time.sleep(1)
+
     logging.info("📓 Opening notebook directly")
     wait_with_log(15, "⏳ Waiting for notebook to load")
 
