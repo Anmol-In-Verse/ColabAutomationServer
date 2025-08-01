@@ -5,22 +5,53 @@ import json
 import os
 from flask import Flask, request, jsonify
 from pyngrok import ngrok, conf
+from colab_controller import (
+    start_colab_session,
+    extract_public_url,
+    interrupt_colab
+)
+
+from selenium.webdriver.common.by import By
+import time
+
 
 # ---- CONFIGURATION ----
-# Paste your bridge's own ngrok authtoken here or set via NGROK_TOKEN env var.
 NGROK_TOKEN = os.getenv('NGROK_TOKEN', '30dpq1UC8r9X6GLzHuljwYFCluO_2wry8UU7LWzRYctzz8UF9')
-
-# Import your existing session controller
-# Ensure 'colab_controller.py' defines 'start_colab_session' and 'extract_public_url'.
 from colab_controller import start_colab_session, extract_public_url
 
 app = Flask(__name__)
 
-# In-memory session store: session_id -> { driver, expiry, public_url }
+# Session store: session_id -> {'driver': webdriver or None, 'expiry': timestamp, 'public_url': str or None}
 sessions = {}
 lock = threading.Lock()
 
-# Start bridge's public endpoint via ngrok
+
+
+def interrupt_colab(driver):
+    """
+    Click the Colab “Interrupt execution” button (the ⏸️ icon)
+    so the Python cell actually stops before we tear down.
+    """
+    try:
+        # There are two paper-icon-buttons with aria-label="Interrupt execution"
+        # depending on runtime state—so pick whichever is present:
+        btn = driver.find_element(
+            By.CSS_SELECTOR,
+            'paper-icon-button[aria-label="Interrupt execution"]'
+        )
+        # The actual clickable element lives inside its shadowRoot:
+        driver.execute_script(
+            "arguments[0].shadowRoot.querySelector('button').click();",
+            btn
+        )
+        # give it a moment to actually interrupt
+        time.sleep(2)
+        print("✅ Colab interrupt button clicked.")
+    except Exception as e:
+        print("⚠️ Could not click interrupt:", e)
+
+
+# Expose bridge API via ngrok
 def setup_ngrok():
     conf.get_default().auth_token = NGROK_TOKEN
     tunnel = ngrok.connect(addr="5000", bind_tls=True)
@@ -37,8 +68,17 @@ def cleanup_expired():
             expired = [sid for sid, info in sessions.items() if now >= info['expiry']]
             for sid in expired:
                 info = sessions.pop(sid, None)
-                if info:
+                if info and info.get('driver'):
                     try:
+                        # Interrupt any running cell
+                        info['driver'].execute_script("""
+                            let btn = document.querySelector('colab-toolbar-button[icon="pause-circle"]');
+                            if(btn && btn.shadowRoot) {
+                                let interruptBtn = btn.shadowRoot.querySelector('button');
+                                if(interruptBtn) interruptBtn.click();
+                            }
+                        """)
+                        time.sleep(1)
                         info['driver'].quit()
                         app.logger.info(f"Session {sid} expired and closed")
                     except Exception as e:
@@ -47,29 +87,39 @@ def cleanup_expired():
 
 threading.Thread(target=cleanup_expired, daemon=True).start()
 
+# Worker to start and track a Colab session asynchronously
+def session_worker(sid):
+    try:
+        driver = start_colab_session()
+        url = extract_public_url(driver)
+        with lock:
+            if sid in sessions:
+                sessions[sid]['driver'] = driver
+                sessions[sid]['public_url'] = url
+    except Exception as e:
+        app.logger.error(f"Error in session setup {sid}: {e}")
+
 @app.route('/session/create', methods=['POST'])
 def create_session():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     duration = data.get('duration', 3600)
     sid = data.get('id') or str(uuid.uuid4())
 
     with lock:
         if sid in sessions:
             return jsonify({"error": "Session ID already exists"}), 400
-        try:
-            driver = start_colab_session()
-            public_url = extract_public_url(driver)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
         expiry = time.time() + duration
-        sessions[sid] = { 'driver': driver, 'expiry': expiry, 'public_url': public_url }
+        # Initialize placeholder
+        sessions[sid] = {'driver': None, 'expiry': expiry, 'public_url': None}
 
-    return jsonify({"id": sid, "expires_at": expiry, "public_url": public_url}), 201
+    # Launch async setup thread
+    threading.Thread(target=session_worker, args=(sid,), daemon=True).start()
+
+    return jsonify({"id": sid, "expires_at": expiry, "public_url": None}), 201
 
 @app.route('/session/kill', methods=['POST'])
 def kill_session():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     sid = data.get('id')
     if not sid:
         return jsonify({"error": "No session ID provided"}), 400
@@ -77,10 +127,16 @@ def kill_session():
         info = sessions.pop(sid, None)
     if not info:
         return jsonify({"error": "Session not found"}), 404
-    try:
-        info['driver'].quit()
-    except Exception as e:
-        app.logger.error(f"Error quitting driver for session {sid}: {e}")
+    driver = info.get('driver')
+    if driver:
+        try:
+            # Interrupt any running cell in Colab
+
+            interrupt_colab(driver) 
+            time.sleep(2)
+            driver.quit()
+        except Exception as e:
+            app.logger.error(f"Error quitting driver for session {sid}: {e}")
     return jsonify({"id": sid, "killed": True}), 200
 
 @app.route('/cookies/create', methods=['POST'])
@@ -98,21 +154,14 @@ def list_sessions():
     result = []
     with lock:
         for sid, info in sessions.items():
-            try:
-                cookies = info['driver'].get_cookies()
-            except:
-                cookies = []
             result.append({
                 'id': sid,
                 'expires_at': info['expiry'],
                 'expired': now >= info['expiry'],
                 'public_url': info['public_url'],
-                'cookies': cookies
+                'ready': info['public_url'] is not None
             })
-    return jsonify({
-        'bridge_url': BRIDGE_PUBLIC_URL,
-        'sessions': result
-    }), 200
+    return jsonify({ 'bridge_url': BRIDGE_PUBLIC_URL, 'sessions': result }), 200
 
 @app.route('/session/status/<sid>', methods=['GET'])
 def session_status(sid):
@@ -121,7 +170,12 @@ def session_status(sid):
     if not info:
         return jsonify({"error": "Session not found"}), 404
     expired = time.time() >= info['expiry']
-    return jsonify({"id": sid, "expired": expired, "public_url": info['public_url']}), 200
+    return jsonify({
+        "id": sid,
+        "expired": expired,
+        "public_url": info['public_url'],
+        "ready": info['public_url'] is not None
+    }), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

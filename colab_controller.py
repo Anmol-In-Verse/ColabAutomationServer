@@ -5,9 +5,51 @@ import threading
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
+
+
+
+from selenium.webdriver.common.by import By
+import time
+
+def interrupt_colab(driver):
+    print("[*] Attempting to interrupt cell execution...")
+    try:
+        # Try clicking the stop button 3 times
+        for i in range(3):
+            clicked = driver.execute_script("""
+                const btn = document.querySelector('div.cell-execution.running button#run-button');
+                const svg = btn?.querySelector('svg#stop-symbol');
+                if (btn && svg) {
+                    btn.click();
+                    return true;
+                }
+                return false;
+            """)
+            if clicked:
+                print(f"[✓] Clicked stop button ({i+1}/3)")
+            else:
+                print(f"[!] Stop button not found on attempt {i+1}")
+            time.sleep(1.5)
+
+        # Now try keyboard shortcut: Ctrl + M, then I (3 times)
+        actions = ActionChains(driver)
+        for i in range(3):
+            actions.key_down(Keys.CONTROL).send_keys('m').key_up(Keys.CONTROL).send_keys('i').perform()
+            print(f"[✓] Sent Ctrl+M then I ({i+1}/3)")
+            time.sleep(1.5)
+
+        print("[✓] Interrupt attempts completed.")
+        time.sleep(2)  # Allow time for interrupt to take effect
+
+    except Exception as e:
+        print(f"[ERROR] interrupt_colab() failed: {e}")
+
+
 
 def wait_with_log(seconds, message=""):
     for i in range(seconds):
@@ -135,3 +177,6 @@ def start_colab_session():
 
 if __name__ == "__main__":
     driver = start_colab_session()
+    
+
+__all__ = ["start_colab_session", "extract_public_url", "interrupt_colab"]
