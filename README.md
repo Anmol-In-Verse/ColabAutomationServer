@@ -148,7 +148,7 @@ curl -X POST https://YOUR_NGROK_URL/kill
 ---
 
 ## 👋 Contributing
-PRs and issues welcome! This is an early-stage tool designed for automation lovers, bot creators, and testing flows with Google Colab notebooks.
+PRs and issues welcome! This is an early-stage tool designed for automation flows with Google Colab notebooks.
 
 ---
 
