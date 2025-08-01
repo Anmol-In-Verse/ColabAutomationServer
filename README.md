@@ -83,7 +83,7 @@ curl ${BRIDGE_URL}/sessions
 
 ---
 
-### 4. ❌ Kill a Session Immediately
+### 4. ❌ Kill a Session Immediately (SESSION SELENIUM KILL)
 
 ```bash
 curl -X POST ${BRIDGE_URL}/session/kill \
@@ -139,7 +139,7 @@ echo "→ Public URL: $URL"
 
 ---
 
-### ⚡ Instant Kill Endpoint
+### ⚡ Instant Kill Endpoint (DISCONNECT COLAB)
 
 ```bash
 curl -X POST https://YOUR_NGROK_URL/kill
@@ -153,5 +153,5 @@ PRs and issues welcome! This is an early-stage tool designed for automation love
 ---
 
 ## 🌐 License
-MIT License — use it freely, modify it fully.
+DO NOT TOUCH IM OWNER GET LOST FROM HER !!!
 
