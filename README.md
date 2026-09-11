@@ -153,5 +153,5 @@ PRs and issues welcome! This is an early-stage tool designed for automation flow
 ---
 
 ## 🌐 License
-DO NOT TOUCH IM OWNER GET LOST FROM HERE !!!
+DO NOT TOUCH IM OWNER  !!!
 
